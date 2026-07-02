@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Silsilah Keluarga Wanio</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <style>
+        body { background-color: #f5f5f4; font-family: system-ui, -apple-system, sans-serif; overflow: hidden; overscroll-behavior: none; }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb { background: #10b981; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #059669; }
+        .cursor-grab { cursor: grab; }
+        .cursor-grabbing { cursor: grabbing; }
+        .no-select { -webkit-user-select: none; -moz-user-select: none; -ms-user-select: none; user-select: none; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
+        import { getFirestore, collection, onSnapshot, addDoc, doc, updateDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
+
+        // Kunci Rahasia Firebase milik Pak Saiful
+        const firebaseConfig = {
+            apiKey: "AIzaSyDPX2zBS0fx0IhTnXXd4psM-j9f5k0t2MA",
+            authDomain: "silsilah-keluarga-besar.firebaseapp.com",
+            projectId: "silsilah-keluarga-besar",
+            storageBucket: "silsilah-keluarga-besar.firebasestorage.app",
+            messagingSenderId: "568533281237",
+            appId: "1:568533281237:web:68c1d16f5e5c9f0c47755c"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        const { useState, useEffect, useRef } = React;
+
+        function App() {
+            // FITUR BARU: State untuk Kode Ruangan (Bilik Keluarga)
+            const [roomCode, setRoomCode] = useState(() => localStorage.getItem('silsilah_room_code') || '');
+            const [inputRoomCode, setInputRoomCode] = useState('');
+
+            // Tab Menu Navigasi
+            const [activeTab, setActiveTab] = useState('tree');
+            const [user, setUser] = useState(null);
+            const [familyData, setFamilyData] = useState([]);
+            const [isLoading, setIsLoading] = useState(false);
+            const [notification, setNotification] = useState({ show: false, message: '', type: '' });
+            
+            // State Form & Bagan
+            const [editingId, setEditingId] = useState(null);
+            const [formData, setFormData] = useState({
+                name: '', spouse: '', birthDate: '', deathDate: '', province: '', parentId: 'root'
+            });
+            const [zoomLevel, setZoomLevel] = useState(1);
+            const [deleteConfirm, setDeleteConfirm] = useState({ show: false, id: null, name: '' });
+            const [isCapturing, setIsCapturing] = useState(false);
+
+            // Fitur Drag (Geser Layar pakai Mouse/Jari)
+            const scrollRef = useRef(null);
+            const [isDragging, setIsDragging] = useState(false);
+            const [startX, setStartX] = useState(0);
+            const [startY, setStartY] = useState(0);
+            const [scrollLeft, setScrollLeft] = useState(0);
+            const [scrollTop, setScrollTop] = useState(0);
+
+            useEffect(() => {
+                signInAnonymously(auth).catch(err => {
+                    showNotification("Gagal terhubung ke sistem.", "error");
+                });
+                const unsubAuth = onAuthStateChanged(auth, (currentUser) => {
+                    setUser(currentUser);
+                });
+                return () => unsubAuth();
+            }, []);
+
+            // Fungsi Cerdas: Menentukan Folder Database berdasarkan Kode Ruangan
+            const getCollectionName = () => {
+                // Agar data Pak Saiful yang sudah ada tidak hilang, kode "WANIO" akan diarahkan ke folder lama
+                if (roomCode === 'WANIO') {
+                    return 'silsilah_keluarga'; 
+                }
+                // Untuk teman-teman Bapak, akan dibuatkan folder baru sesuai kode mereka
+                return `silsilah_keluarga_${roomCode}`;
+            };
+
+            useEffect(() => {
+                if (!user || !roomCode) return;
+                setIsLoading(true);
+                
+                const dbName = getCollectionName();
+                const q = collection(db, dbName);
+                
+                const unsubData = onSnapshot(q, (snapshot) => {
+                    const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    data.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+                    setFamilyData(data);
+                    setIsLoading(false);
+                }, (error) => {
+                    showNotification("Koneksi internet terputus.", "error");
+                    setIsLoading(false);
+                });
+
+                return () => unsubData();
+            }, [user, roomCode]);
+
+            const showNotification = (message, type = 'success') => {
+                setNotification({ show: true, message, type });
+                setTimeout(() => setNotification({ show: false, message: '', type: '' }), 4000);
+            };
+
+            // Fungsi Masuk & Keluar Ruangan
+            const handleJoinRoom = (e) => {
+                e.preventDefault();
+                const cleanCode = inputRoomCode.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+                if (!cleanCode) {
+                    showNotification('Kode tidak boleh kosong / harus huruf dan angka!', 'error'); return;
+                }
+                localStorage.setItem('silsilah_room_code', cleanCode);
+                setRoomCode(cleanCode);
+            };
+
+            const handleLeaveRoom = () => {
+                localStorage.removeItem('silsilah_room_code');
+                setRoomCode('');
+                setInputRoomCode('');
+                setFamilyData([]); // Kosongkan layar
+            };
+
+            const handleInputChange = (e) => setFormData({ ...formData, [e.target.name]: e.target.value });
+
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                if (!formData.name) { showNotification('Nama Wajib Diisi!', 'error'); return; }
+                
+                setIsLoading(true);
+                const dbName = getCollectionName();
+
+                try {
+                    if (editingId) {
+                        await updateDoc(doc(db, dbName, editingId), {
+                            ...formData, parentId: formData.parentId === 'root' ? null : formData.parentId
+                        });
+                        showNotification('Data berhasil diperbarui!');
+                    } else {
+                        await addDoc(collection(db, dbName), {
+                            ...formData, parentId: formData.parentId === 'root' ? null : formData.parentId, createdAt: Date.now()
+                        });
+                        showNotification('Data berhasil ditambahkan!');
+                    }
+                    
+                    setFormData({ name: '', spouse: '', birthDate: '', deathDate: '', province: '', parentId: 'root' });
+                    setEditingId(null);
+                    setActiveTab('tree');
+                } catch (error) {
+                    showNotification('Gagal menyimpan data.', 'error');
+                } finally {
+                    setIsLoading(false);
+                }
+            };
+
+            const handleEdit = (member) => {
+                setFormData({
+                    name: member.name || '', spouse: member.spouse || '', birthDate: member.birthDate || '',
+                    deathDate: member.deathDate || '', province: member.province || '', parentId: member.parentId || 'root'
+                });
+                setEditingId(member.id);
+                setActiveTab('input');
+            };
+
+            const executeDelete = async () => {
+                try {
+                    const dbName = getCollectionName();
+                    await deleteDoc(doc(db, dbName, deleteConfirm.id));
+                    showNotification(`Data ${deleteConfirm.name} berhasil dihapus.`);
+                } catch (error) {
+                    showNotification('Gagal menghapus data.', 'error');
+                }
+                setDeleteConfirm({ show: false, id: null, name: '' });
+            };
+
+            const exportToSheets = () => {
+                if (familyData.length === 0) { showNotification('Belum ada data', 'error'); return; }
+                const headers = ['Nama Lengkap,Nama Suami/Istri,Tanggal Lahir,Tanggal Meninggal,Provinsi Tinggal'];
+                const csvData = familyData.map(m => `"${m.name || ''}","${m.spouse || ''}","${m.birthDate || ''}","${m.deathDate || ''}","${m.province || ''}"`);
+                const csvContent = "data:text/csv;charset=utf-8," + headers.concat(csvData).join("\n");
+                const link = document.createElement("a");
+                link.href = encodeURI(csvContent);
+                link.download = `Data_Silsilah_${roomCode}.csv`;
+                document.body.appendChild(link); link.click(); document.body.removeChild(link);
+                showNotification('Tabel berhasil diunduh!');
+            };
+
+            const exportToHTMLFile = () => {
+                if (familyData.length === 0) { showNotification('Belum ada data untuk diunduh', 'error'); return; }
+                showNotification('Menyiapkan File HTML...', 'success');
+                setActiveTab('tree');
+
+                setTimeout(() => {
+                    const treeElement = document.getElementById('tree-capture-area');
+                    if (!treeElement) { showNotification('Gagal memproses bagan.', 'error'); return; }
+
+                    const clone = treeElement.cloneNode(true);
+                    clone.style.transform = 'none';
+                    const buttons = clone.querySelectorAll('button');
+                    buttons.forEach(btn => btn.remove());
+
+                    const htmlContent = `
+                    <!DOCTYPE html>
+                    <html lang="id">
+                    <head>
+                        <meta charset="UTF-8">
+                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                        <title>Bagan Silsilah - ${roomCode}</title>
+                        <script src="https://cdn.tailwindcss.com"><\/script>
+                        <style>
+                            body { background-color: #f5f5f4; font-family: system-ui, -apple-system, sans-serif; padding: 40px; margin: 0; min-width: max-content; }
+                            h1 { color: #065f46; font-size: 28px; font-weight: 900; margin-bottom: 5px; }
+                            p { color: #6b7280; font-size: 14px; margin-bottom: 30px; }
+                            @media print {
+                                body { -webkit-print-color-adjust: exact; print-color-adjust: exact; background-color: white; padding: 0;}
+                                h1, p { text-align: center; }
+                            }
+                        </style>
+                    </head>
+                    <body>
+                        <div>
+                            <h1>Bagan Silsilah Keluarga (${roomCode})</h1>
+                            <p>Tekan <b>Ctrl + P</b> (atau Command + P) di keyboard untuk mencetak bagan ini sebagai <b>PDF</b> berkualitas tinggi.</p>
+                        </div>
+                        <div style="display: inline-flex; flex-direction: column; transform-origin: top left;">
+                            ${clone.innerHTML}
+                        </div>
+                    </body>
+                    </html>
+                    `;
+
+                    const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
+                    const url = URL.createObjectURL(blob);
+                    const link = document.createElement('a');
+                    link.href = url;
+                    link.download = `Bagan_Silsilah_${roomCode}.html`;
+                    document.body.appendChild(link); link.click(); document.body.removeChild(link);
+                    URL.revokeObjectURL(url);
+                    showNotification('File HTML berhasil diunduh! Klik 2x untuk membuka.');
+                }, 500);
+            };
+
+            const startDrag = (e) => {
+                if (!scrollRef.current) return;
+                setIsDragging(true);
+                setStartX((e.pageX || e.touches[0].pageX) - scrollRef.current.offsetLeft);
+                setStartY((e.pageY || e.touches[0].pageY) - scrollRef.current.offsetTop);
+                setScrollLeft(scrollRef.current.scrollLeft);
+                setScrollTop(scrollRef.current.scrollTop);
+            };
+            const stopDrag = () => setIsDragging(false);
+            const doDrag = (e) => {
+                if (!isDragging || !scrollRef.current) return;
+                e.preventDefault();
+                const x = (e.pageX || (e.touches && e.touches[0].pageX)) - scrollRef.current.offsetLeft;
+                const y = (e.pageY || (e.touches && e.touches[0].pageY)) - scrollRef.current.offsetTop;
+                scrollRef.current.scrollLeft = scrollLeft - (x - startX);
+                scrollRef.current.scrollTop = scrollTop - (y - startY);
+            };
+
+            const TreeNode = ({ member, allMembers }) => {
+                const children = allMembers.filter(m => m.parentId === member.id);
+                
+                return (
+                    <div className="flex flex-col items-center">
+                        <div className="relative bg-white border-[2px] border-emerald-500 rounded-xl p-3 shadow-md w-48 md:w-56 flex flex-col items-center z-10 mx-2">
+                            
+                            {/* Tombol kebal drag */}
+                            {!isCapturing && (
+                                <button onClick={(e) => { e.stopPropagation(); setDeleteConfirm({show: true, id: member.id, name: member.name}); }} 
+                                        onMouseDown={(e) => e.stopPropagation()} onTouchStart={(e) => e.stopPropagation()}
+                                        className="absolute -top-3 -left-3 bg-red-500 hover:bg-red-600 text-white p-1.5 rounded-full shadow-md z-20 transition transform hover:scale-110 active:scale-95">
+                                    🗑️
+                                </button>
+                            )}
+                            
+                            {!isCapturing && (
+                                <button onClick={(e) => { e.stopPropagation(); handleEdit(member); }} 
+                                        onMouseDown={(e) => e.stopPropagation()} onTouchStart={(e) => e.stopPropagation()}
+                                        className="absolute -top-3 -right-3 bg-yellow-400 hover:bg-yellow-500 text-yellow-900 p-1.5 rounded-full shadow-md z-20 transition transform hover:scale-110 active:scale-95">
+                                    ✏️
+                                </button>
+                            )}
+
+                            <h3 className="font-extrabold text-[13px] md:text-sm text-gray-800 text-center uppercase break-words leading-tight">{member.name}</h3>
+                            
+                            {member.spouse && (
+                                <p className="text-pink-600 font-bold text-[11px] md:text-xs mt-1 uppercase text-center flex items-center gap-1">
+                                    <span>❤️</span> {member.spouse}
+                                </p>
+                            )}
+                            
+                            <div className="text-[9px] md:text-[10px] text-gray-600 mt-2 w-full flex flex-col gap-1 font-semibold">
+                                <span className="bg-emerald-50 rounded py-0.5 px-1 text-center text-emerald-800">
+                                   Lahir: {member.birthDate ? member.birthDate.split('-').reverse().join('/') : '?'}
+                                </span>
+                                {member.deathDate && (
+                                    <span className="bg-red-50 rounded py-0.5 px-1 text-center text-red-700">Wafat: {member.deathDate.split('-').reverse().join('/')}</span>
+                                )}
+                                <span className="bg-blue-50 rounded py-0.5 px-1 text-center text-blue-800">📍 {member.province || '?'}</span>
+                            </div>
+                        </div>
+
+                        {/* Garis Bagan (Metode Blok Presisi) */}
+                        {children.length > 0 && (
+                            <div className="flex flex-col items-center w-full">
+                                <div className="w-0.5 h-6 bg-emerald-500"></div>
+                                <div className="flex justify-center relative w-full">
+                                    {children.map((child, index) => {
+                                        const isFirst = index === 0;
+                                        const isLast = index === children.length - 1;
+                                        const isOnly = children.length === 1;
+
+                                        return (
+                                            <div key={child.id} className="flex flex-col items-center relative">
+                                                {!isOnly && (
+                                                    <div className="absolute top-0 w-full h-0.5 flex">
+                                                        <div className={`h-full w-1/2 ${isFirst ? 'bg-transparent' : 'bg-emerald-500'}`}></div>
+                                                        <div className={`h-full w-1/2 ${isLast ? 'bg-transparent' : 'bg-emerald-500'}`}></div>
+                                                    </div>
+                                                )}
+                                                <div className="w-0.5 h-6 bg-emerald-500"></div>
+                                                <TreeNode member={child} allMembers={allMembers} />
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                );
+            };
+
+            if (!roomCode) {
+                return (
+                    <div className="min-h-screen bg-emerald-700 flex flex-col items-center justify-center p-4 selection:bg-emerald-200">
+                        <div className="bg-white rounded-[2rem] shadow-2xl p-8 max-w-md w-full text-center border-4 border-emerald-500/20">
+                            <div className="text-6xl mb-4 animate-bounce">🚪</div>
+                            <h1 className="text-3xl font-black text-emerald-800 mb-2 tracking-tight">Kode Akses</h1>
+                            <p className="text-gray-500 text-sm mb-8 font-medium">Aplikasi ini memiliki banyak ruangan keluarga. Silakan ketik nama keluarga Anda untuk masuk.</p>
+                            
+                            <form onSubmit={handleJoinRoom} className="space-y-4">
+                                <input
+                                    type="text"
+                                    value={inputRoomCode}
+                                    onChange={(e) => setInputRoomCode(e.target.value.toUpperCase())}
+                                    placeholder="MASUKKAN KODE AKSES"
+                                    className="w-full p-4 border-2 border-gray-200 rounded-2xl text-center text-2xl font-black text-emerald-900 focus:outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100 uppercase tracking-widest transition"
+                                    required
+                                />
+                                <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-black text-lg py-4 rounded-2xl shadow-xl shadow-emerald-600/30 transition transform active:scale-95">
+                                    Buka Pintu Silsilah
+                                </button>
+                            </form>
+                            
+                            <div className="mt-8 text-sm text-center bg-slate-100 border border-slate-200 p-4 rounded-xl text-slate-700 font-medium leading-relaxed">
+                                <strong>🔒 Sistem Keamanan Terbatas</strong><br/>
+                                Silakan hubungi Administrator (Pembuat Aplikasi) untuk mendapatkan Kode Akses.
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
+
+            const rootMembers = familyData.filter(m => !m.parentId);
+            const sortedFamilyData = [...familyData].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+            return (
+                <div className="h-[100dvh] flex flex-col bg-stone-50 overflow-hidden no-select">
+                    
+                    <header className="bg-emerald-700 text-white p-3 md:p-4 shadow-md z-50 flex justify-between items-center fixed top-0 w-full shrink-0">
+                        <div className="flex items-center gap-2">
+                            <span className="text-xl md:text-2xl animate-pulse">💖</span>
+                            <div>
+                                <h1 className="text-base md:text-xl font-black tracking-tight leading-tight">Silsilah Keluarga</h1>
+                                <p className="text-[9px] md:text-[10px] text-emerald-200 uppercase font-bold tracking-widest">Aplikasi Real-Time</p>
+                            </div>
+                        </div>
+                        <div className="flex flex-col items-end gap-1.5">
+                            <div className="bg-emerald-800 px-3 py-1 rounded-full text-[10px] md:text-xs font-bold flex items-center gap-2 border border-emerald-600">
+                                {isLoading ? "Memuat..." : <><div className="w-2 h-2 bg-green-400 rounded-full animate-pulse shadow-[0_0_8px_#4ade80]"></div> Online</>}
+                            </div>
+                            <button onClick={handleLeaveRoom} className="text-[9px] md:text-[10px] font-bold bg-red-500/20 hover:bg-red-500 text-red-100 px-2.5 py-1 rounded-full transition flex items-center gap-1 active:scale-95">
+                                🚪 KELUAR: {roomCode}
+                            </button>
+                        </div>
+                    </header>
+
+                    {notification.show && (
+                        <div className={`fixed top-24 left-1/2 -translate-x-1/2 z-[60] px-6 py-3 rounded-xl shadow-xl text-white font-bold animate-bounce whitespace-nowrap ${notification.type === 'error' ? 'bg-red-600' : 'bg-emerald-600'}`}>
+                            {notification.message}
+                        </div>
+                    )}
+
+                    {deleteConfirm.show && (
+                        <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4 backdrop-blur-sm">
+                            <div className="bg-white rounded-3xl p-6 max-w-sm w-full text-center shadow-2xl transform transition-all scale-100">
+                                <div className="text-5xl mb-2">🗑️</div>
+                                <h3 className="text-2xl font-black text-red-600 mb-2">Hapus Data?</h3>
+                                <p className="text-gray-600 mb-6 text-sm font-medium">Yakin ingin menghapus <strong>{deleteConfirm.name}</strong>? Jika dia punya anak, garis keturunannya akan terputus.</p>
+                                <div className="flex gap-3">
+                                    <button onClick={() => setDeleteConfirm({show: false, id: null, name: ''})} className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-800 font-bold py-3.5 rounded-xl transition">Batal</button>
+                                    <button onClick={executeDelete} className="flex-1 bg-red-600 hover:bg-red-700 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-red-600/30 transition active:scale-95">Ya, Hapus</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    <main className="flex-1 pt-16 md:pt-20 pb-20 w-full overflow-hidden flex flex-col relative">
+                        
+                        {activeTab === 'input' && (
+                            <div className="w-full h-full overflow-y-auto p-4 md:p-6 pb-32">
+                                <div className="max-w-2xl mx-auto bg-white p-6 md:p-8 rounded-[2rem] shadow-xl border border-gray-100">
+                                    <h2 className="text-2xl md:text-3xl font-black text-emerald-800 text-center mb-6 flex items-center justify-center gap-3">
+                                        {editingId ? '✏️ Edit Data' : '➕ Tambah Data Baru'}
+                                    </h2>
+                                    <form onSubmit={handleSubmit} className="space-y-6">
+                                        <div className="bg-emerald-50 p-5 rounded-2xl border border-emerald-100">
+                                            <label className="block text-emerald-900 font-black mb-2">Orang Tua (Anak Dari):</label>
+                                            <select name="parentId" value={formData.parentId} onChange={handleInputChange} className="w-full p-4 rounded-xl border-2 border-emerald-200 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100 outline-none bg-white font-bold text-gray-800 shadow-sm transition">
+                                                <option value="root">🌟 Leluhur Pertama (Paling Atas)</option>
+                                                {sortedFamilyData.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block font-black text-gray-800 mb-2">Nama Lengkap:</label>
+                                            <input type="text" name="name" value={formData.name} onChange={handleInputChange} className="w-full p-4 rounded-xl border-2 border-gray-200 outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100 font-bold uppercase shadow-sm transition" required />
+                                        </div>
+                                        <div>
+                                            <label className="block font-black text-pink-600 mb-2">Nama Suami/Istri (Pasangan):</label>
+                                            <input type="text" name="spouse" value={formData.spouse} onChange={handleInputChange} placeholder="Kosongkan jika belum menikah" className="w-full p-4 rounded-xl border-2 border-pink-100 outline-none focus:border-pink-500 focus:ring-4 focus:ring-pink-100 uppercase shadow-sm transition" />
+                                        </div>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                                            <div><label className="block font-black text-gray-800 mb-2">Tgl Lahir:</label><input type="date" name="birthDate" value={formData.birthDate} onChange={handleInputChange} className="w-full p-4 rounded-xl border-2 border-gray-200 outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100 shadow-sm transition" /></div>
+                                            <div><label className="block font-black text-red-600 mb-2">Tgl Meninggal:</label><input type="date" name="deathDate" value={formData.deathDate} onChange={handleInputChange} className="w-full p-4 rounded-xl border-2 border-red-200 outline-none focus:border-red-500 focus:ring-4 focus:ring-red-100 shadow-sm transition" /></div>
+                                        </div>
+                                        <div>
+                                            <label className="block font-black text-gray-800 mb-2">Provinsi / Kota Tinggal:</label>
+                                            <input type="text" name="province" value={formData.province} onChange={handleInputChange} className="w-full p-4 rounded-xl border-2 border-gray-200 outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100 uppercase shadow-sm transition" />
+                                        </div>
+                                        <div className="flex gap-4 pt-6">
+                                            <button type="submit" disabled={isLoading} className="flex-1 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-white font-black text-lg py-5 rounded-2xl shadow-xl shadow-emerald-600/30 transition transform active:scale-95">
+                                                {isLoading ? 'Menyimpan...' : (editingId ? 'Simpan Perubahan' : 'Simpan Data')}
+                                            </button>
+                                            {editingId && (
+                                                <button type="button" onClick={() => {setEditingId(null); setFormData({name: '', spouse: '', birthDate: '', deathDate: '', province: '', parentId: 'root'})}} className="bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold px-8 py-5 rounded-2xl transition">Batal</button>
+                                            )}
+                                        </div>
+                                    </form>
+                                </div>
+                            </div>
+                        )}
+
+                        {activeTab === 'tree' && (
+                            <div className="w-full h-full relative bg-stone-50 overflow-hidden">
+                                
+                                <div className="absolute top-4 left-4 z-[30] pointer-events-none">
+                                    <div className="bg-white/90 px-5 py-3 rounded-2xl shadow-lg border border-emerald-100 backdrop-blur-sm">
+                                        <h2 className="text-lg md:text-2xl font-black text-emerald-800 tracking-tight">Pohon Keluarga</h2>
+                                        <p className="text-[10px] md:text-xs text-gray-500 font-medium">Klik tahan & geser layar untuk melihat</p>
+                                    </div>
+                                </div>
+                                <div className="absolute top-4 right-4 z-[30] flex flex-col gap-2 pointer-events-auto bg-white/80 p-2.5 rounded-2xl shadow-lg backdrop-blur-md border border-emerald-50">
+                                    <button onClick={() => setZoomLevel(z => Math.min(z + 0.2, 1.5))} className="bg-emerald-100 text-emerald-800 w-10 h-10 md:w-12 md:h-12 rounded-full font-black shadow-sm hover:bg-emerald-200 text-xl transition active:scale-90">🔍+</button>
+                                    <span className="text-[10px] md:text-xs font-black text-center text-emerald-900">{Math.round(zoomLevel * 100)}%</span>
+                                    <button onClick={() => setZoomLevel(z => Math.max(z - 0.2, 0.2))} className="bg-emerald-100 text-emerald-800 w-10 h-10 md:w-12 md:h-12 rounded-full font-black shadow-sm hover:bg-emerald-200 text-xl transition active:scale-90">🔍-</button>
+                                </div>
+
+                                <div id="tree-scroll-container" 
+                                     ref={scrollRef} 
+                                     onMouseDown={startDrag} 
+                                     onTouchStart={startDrag}
+                                     onMouseLeave={stopDrag} 
+                                     onMouseUp={stopDrag} 
+                                     onTouchEnd={stopDrag}
+                                     onMouseMove={doDrag}
+                                     onTouchMove={doDrag}
+                                     className={`w-full h-full overflow-auto flex items-start justify-start ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}>
+                                    
+                                    {familyData.length === 0 && !isLoading ? (
+                                        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-center pointer-events-none">
+                                            <span className="text-7xl mb-4 block">🌳</span>
+                                            <p className="text-xl md:text-2xl font-black text-gray-400">Ruangan ini masih kosong.</p>
+                                            <p className="text-sm text-gray-400 mt-2">Silakan mulai isi dari menu Tambah Data.</p>
+                                        </div>
+                                    ) : (
+                                        <div className="min-w-max pr-32 pb-40">
+                                            <div id="tree-capture-area" 
+                                                 className="inline-flex flex-col origin-top-left transition-transform duration-200 pt-32 pl-10" 
+                                                 style={{ transform: `scale(${zoomLevel})` }}>
+                                                <div className="flex justify-start">
+                                                    {rootMembers.map(root => (
+                                                        <TreeNode key={root.id} member={root} allMembers={familyData} />
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
+                        {activeTab === 'export' && (
+                            <div className="w-full h-full overflow-y-auto p-4 md:p-6 flex items-center justify-center pb-32">
+                                <div className="max-w-xl w-full bg-white rounded-[2rem] shadow-2xl overflow-hidden border border-gray-100 transform transition-all">
+                                    <div className="bg-blue-600 p-8 text-center">
+                                        <h2 className="text-2xl md:text-3xl font-black text-white">Simpan Laporan</h2>
+                                    </div>
+                                    <div className="p-6 md:p-10 space-y-6">
+                                        <div className="border-4 border-emerald-100 bg-white hover:bg-emerald-50 rounded-2xl p-5 md:p-6 flex flex-col md:flex-row items-center justify-between gap-4 transition cursor-pointer" onClick={exportToSheets}>
+                                            <div className="text-center md:text-left">
+                                                <h3 className="font-black text-gray-800 text-lg md:text-xl">Google Sheets</h3>
+                                                <p className="text-xs md:text-sm font-medium text-gray-500 mt-1">Unduh bentuk tabel Excel (CSV).</p>
+                                            </div>
+                                            <button className="w-full md:w-auto bg-emerald-600 text-white font-black py-3 px-8 rounded-xl shadow-lg active:scale-95 transition">
+                                                Unduh Tabel
+                                            </button>
+                                        </div>
+
+                                        <div className="border-4 border-blue-100 bg-white hover:bg-blue-50 rounded-2xl p-5 md:p-6 flex flex-col md:flex-row items-center justify-between gap-4 transition cursor-pointer" onClick={exportToHTMLFile}>
+                                            <div className="text-center md:text-left">
+                                                <h3 className="font-black text-gray-800 text-lg md:text-xl">File Bagan (HTML)</h3>
+                                                <p className="text-xs md:text-sm font-medium text-gray-500 mt-1">Anti pecah, bisa di-Print ke PDF.</p>
+                                            </div>
+                                            <button className="w-full md:w-auto bg-blue-600 text-white font-black py-3 px-8 rounded-xl shadow-lg active:scale-95 transition">
+                                                Unduh File
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </main>
+
+                    <nav className="fixed bottom-0 w-full bg-white border-t border-gray-200 shadow-[0_-15px_30px_-5px_rgba(0,0,0,0.1)] z-50 pb-safe">
+                        <div className="max-w-md mx-auto flex justify-between p-2 px-4 gap-2">
+                            <button onClick={() => setActiveTab('input')} className={`flex flex-col items-center justify-center w-1/3 py-3 rounded-2xl transition-all ${activeTab === 'input' ? 'text-emerald-700 bg-emerald-100 scale-105 shadow-sm' : 'text-gray-400 hover:bg-gray-50'}`}>
+                                <span className="text-2xl mb-1">➕</span>
+                                <span className="text-[10px] md:text-xs font-black">Isi Data</span>
+                            </button>
+                            <button onClick={() => setActiveTab('tree')} className={`flex flex-col items-center justify-center w-1/3 py-3 rounded-2xl transition-all ${activeTab === 'tree' ? 'text-emerald-700 bg-emerald-100 scale-105 shadow-sm' : 'text-gray-400 hover:bg-gray-50'}`}>
+                                <span className="text-2xl mb-1">🌳</span>
+                                <span className="text-[10px] md:text-xs font-black">Bagan Silsilah</span>
+                            </button>
+                            <button onClick={() => setActiveTab('export')} className={`flex flex-col items-center justify-center w-1/3 py-3 rounded-2xl transition-all ${activeTab === 'export' ? 'text-blue-700 bg-blue-100 scale-105 shadow-sm' : 'text-gray-400 hover:bg-gray-50'}`}>
+                                <span className="text-2xl mb-1">💾</span>
+                                <span className="text-[10px] md:text-xs font-black">Cetak Data</span>
+                            </button>
+                        </div>
+                    </nav>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
